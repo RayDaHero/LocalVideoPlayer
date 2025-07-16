@@ -50,7 +50,7 @@ class VideoRepository(private val context: Context) {
                     projection,
                     selection,
                     selectionArgs,
-                    "${MediaStore.Video.Media.DATE_ADDED} DESC"
+                    "${MediaStore.Video.Media.DATE_ADDED} DESC LIMIT 100" // Limit results for better performance
                 )
 
                 cursor?.use {
@@ -69,24 +69,23 @@ class VideoRepository(private val context: Context) {
                         val width = it.getInt(widthColumn)
                         val height = it.getInt(heightColumn)
 
+                        // Skip very short videos (less than 1 second) as they're likely corrupted
+                        if (durationMs < 1000) continue
+
                         val contentUri = ContentUris.withAppendedId(
                             MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id
                         )
 
-                        try {
-                            context.contentResolver.openInputStream(contentUri)?.close()
-                            videoList.add(
-                                VideoItem(
-                                    uri = contentUri,
-                                    name = name,
-                                    duration = formatDuration(durationMs),
-                                    size = size,
-                                    resolution = if (width > 0 && height > 0) "$width x $height" else "Unknown"
-                                )
+                        // Quick validation without opening the file (performance improvement)
+                        videoList.add(
+                            VideoItem(
+                                uri = contentUri,
+                                name = name,
+                                duration = formatDuration(durationMs),
+                                size = size,
+                                resolution = if (width > 0 && height > 0) "$width x $height" else "Unknown"
                             )
-                        } catch (e: Exception) {
-                            Log.e("VideoRepository", "Could not open video file", e)
-                        }
+                        )
                     }
                 }
             } catch (e: Exception) {

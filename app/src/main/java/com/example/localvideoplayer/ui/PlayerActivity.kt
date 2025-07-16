@@ -14,6 +14,8 @@ import android.view.animation.AnimationUtils
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.Observer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -74,14 +76,15 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun updateLoopingState() {
         val player = exoPlayer ?: return
-        val startMs = viewModel.loopStartPointMs.value
-        val endMs = viewModel.loopEndPointMs.value
+        val loopPair = viewModel.loopPosition.value
+        val startMs = loopPair?.first
+        val endMs = loopPair?.second
 
         // Always clean up previous listeners and handlers to prevent memory leaks and redundant checks
         playerListener?.let { player.removeListener(it) }
         loopRunnable?.let { loopHandler.removeCallbacks(it) }
 
-        if (startMs != null && endMs != null) {
+        if (startMs != null && endMs != null && startMs != -1L && endMs != -1L) {
             // A custom loop is set. Disable ExoPlayer's default looping.
             player.repeatMode = Player.REPEAT_MODE_OFF
 
@@ -118,19 +121,17 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun setupClickListeners() {
         binding.setStartButton.setOnClickListener {
-            exoPlayer?.currentPosition?.let { viewModel.setLoopStartPoint(it) }
+            exoPlayer?.currentPosition?.let { viewModel.setLoopStart(it) }
         }
         binding.setEndButton.setOnClickListener {
-            exoPlayer?.currentPosition?.let { viewModel.setLoopEndPoint(it) }
+            exoPlayer?.currentPosition?.let { viewModel.setLoopEnd(it) }
         }
         binding.clearLoopButton.setOnClickListener {
-            viewModel.clearLoopPoints()
+            viewModel.clearLoop()
         }
         binding.exportButton.setOnClickListener {
-            val start = viewModel.loopStartPointMs.value
-            val end = viewModel.loopEndPointMs.value
-            if (videoUri != null && start != null && end != null) {
-                startExport(videoUri!!, start, end)
+            if (videoUri != null) {
+                viewModel.exportVideo(videoUri!!)
             }
         }
 
@@ -154,19 +155,23 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun observeViewModel() {
-        viewModel.thumbnails.observe(this, Observer { thumbnails ->
-            thumbnailAdapter.submitList(thumbnails)
-        })
-        viewModel.isGeneratingThumbnails.observe(this, Observer { isLoading ->
-            binding.timelineProgressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
+        viewModel.thumbnails.observe(this, Observer { resource ->
+            when (resource) {
+                is com.example.localvideoplayer.data.Resource.Loading -> {
+                    binding.timelineProgressBar.visibility = View.VISIBLE
+                }
+                is com.example.localvideoplayer.data.Resource.Success -> {
+                    binding.timelineProgressBar.visibility = View.GONE
+                    resource.data?.let { thumbnailAdapter.submitList(it) }
+                }
+                is com.example.localvideoplayer.data.Resource.Error -> {
+                    binding.timelineProgressBar.visibility = View.GONE
+                    Toast.makeText(this, resource.message, Toast.LENGTH_SHORT).show()
+                }
+            }
         })
 
-        viewModel.loopStartPointMs.observe(this) {
-            binding.thumbnailsRecyclerView.invalidateItemDecorations()
-            updateLoopingState()
-            updateLoopUi()
-        }
-        viewModel.loopEndPointMs.observe(this) {
+        viewModel.loopPosition.observe(this) { loopPair ->
             binding.thumbnailsRecyclerView.invalidateItemDecorations()
             updateLoopingState()
             updateLoopUi()
@@ -174,13 +179,14 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun updateLoopUi() {
-        val startMs = viewModel.loopStartPointMs.value
-        val endMs = viewModel.loopEndPointMs.value
+        val loopPair = viewModel.loopPosition.value
+        val startMs = loopPair?.first
+        val endMs = loopPair?.second
 
-        binding.loopStartText.text = if (startMs != null) "Start: ${formatTime(startMs)}" else "Start: -"
-        binding.loopEndText.text = if (endMs != null) "End: ${formatTime(endMs)}" else "End: -"
+        binding.loopStartText.text = if (startMs != null && startMs != -1L) "Start: ${formatTime(startMs)}" else "Start: -"
+        binding.loopEndText.text = if (endMs != null && endMs != -1L) "End: ${formatTime(endMs)}" else "End: -"
 
-        binding.exportButton.visibility = if (startMs != null && endMs != null) View.VISIBLE else View.GONE
+        binding.exportButton.visibility = if (startMs != null && endMs != null && startMs != -1L && endMs != -1L) View.VISIBLE else View.GONE
     }
 
     private fun startExport(uri: Uri, startMs: Long, endMs: Long) {
