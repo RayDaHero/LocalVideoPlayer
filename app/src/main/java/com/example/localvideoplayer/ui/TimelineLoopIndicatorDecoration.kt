@@ -21,9 +21,20 @@ class TimelineLoopIndicatorDecoration(
     override fun onDraw(c: Canvas, parent: RecyclerView, state: RecyclerView.State) {
         super.onDraw(c, parent, state)
 
-        val startMs = viewModel.loopStartPointMs.value ?: return
-        val endMs = viewModel.loopEndPointMs.value ?: return
-        val thumbnails = viewModel.thumbnails.value ?: return
+        // Get loop position from the updated ViewModel structure
+        val loopPosition = viewModel.loopPosition.value ?: return
+        val startMs = loopPosition.first
+        val endMs = loopPosition.second
+        
+        // Check if both start and end are valid (not -1L)
+        if (startMs == -1L || endMs == -1L) return
+        
+        // Get thumbnails from Resource wrapper
+        val thumbnailsResource = viewModel.thumbnails.value ?: return
+        val thumbnails = when (thumbnailsResource) {
+            is com.example.localvideoplayer.data.Resource.Success -> thumbnailsResource.data ?: return
+            else -> return // Don't draw if loading or error
+        }
 
         var startX: Float? = null
         var endX: Float? = null
@@ -31,7 +42,7 @@ class TimelineLoopIndicatorDecoration(
         for (i in 0 until parent.childCount) {
             val view = parent.getChildAt(i)
             val position = parent.getChildAdapterPosition(view)
-            if (position == RecyclerView.NO_POSITION) continue
+            if (position == RecyclerView.NO_POSITION || position >= thumbnails.size) continue
 
             val item = thumbnails[position]
 
