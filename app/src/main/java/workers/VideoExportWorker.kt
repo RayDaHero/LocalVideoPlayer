@@ -68,8 +68,8 @@ class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
 
                 val safeOutputUri = FFmpegKitConfig.getSafParameterForWrite(applicationContext, outputUri)
 
-                // FIXED: Use compatible FFmpeg options without -crf (not supported in this build)
-                val command = "-y -i $safeInputUri -ss ${formatTime(startTimeMs)} -to ${formatTime(endTimeMs)} -c:v libx264 -b:v 3M -c:a aac -b:a 128k $safeOutputUri"
+                // FIXED: Use stream copy for maximum compatibility (no re-encoding needed)
+                val command = "-y -i $safeInputUri -ss ${formatTime(startTimeMs)} -to ${formatTime(endTimeMs)} -c copy $safeOutputUri"
 
                 FFmpegKitConfig.enableStatisticsCallback { stats ->
                     val duration = endTimeMs - startTimeMs
