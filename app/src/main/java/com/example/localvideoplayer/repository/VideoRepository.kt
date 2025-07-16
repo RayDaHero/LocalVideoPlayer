@@ -52,14 +52,16 @@ class VideoRepository(private val context: Context) {
             }
 
             try {
+                Log.d("VideoRepository", "Starting video query with onlyExported: $onlyExported")
                 val cursor = context.contentResolver.query(
                     MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                     projection,
                     selection,
                     selectionArgs,
-                    "${MediaStore.Video.Media.DATE_ADDED} DESC LIMIT 100" // Limit results for better performance
+                    "${MediaStore.Video.Media.DATE_ADDED} DESC" // Fixed: Removed LIMIT from sort order
                 )
 
+                Log.d("VideoRepository", "Cursor result: ${cursor?.count ?: 0} videos found")
                 cursor?.use {
                     val idColumn = it.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                     val nameColumn = it.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
@@ -76,8 +78,8 @@ class VideoRepository(private val context: Context) {
                         val width = it.getInt(widthColumn)
                         val height = it.getInt(heightColumn)
 
-                        // Skip very short videos (less than 1 second) as they're likely corrupted
-                        if (durationMs < 1000) continue
+                        // Skip extremely short videos (less than 100ms) as they're likely corrupted
+                        if (durationMs < 100) continue
 
                         val contentUri = ContentUris.withAppendedId(
                             MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id
@@ -93,6 +95,7 @@ class VideoRepository(private val context: Context) {
                                 resolution = if (width > 0 && height > 0) "$width x $height" else "Unknown"
                             )
                         )
+                        Log.d("VideoRepository", "Added video: $name, duration: ${formatDuration(durationMs)}")
                     }
                 }
             } catch (e: Exception) {
