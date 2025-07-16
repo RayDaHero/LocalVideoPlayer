@@ -46,9 +46,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                         it.setDataSource(getApplication<Application>(), uri)
                         val durationMs = it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
                         
-                        // Optimize: Generate fewer thumbnails (every 5 seconds instead of every second)
-                        val intervalMs = 5000L
-                        val maxThumbnails = 50 // Cap at 50 thumbnails max
+                        // CRITICAL: Much more aggressive optimization to prevent memory issues
+                        val intervalMs = 10000L // Every 10 seconds instead of 5
+                        val maxThumbnails = 20 // Reduced from 50 to 20 thumbnails max
                         val actualInterval = maxOf(intervalMs, durationMs / maxThumbnails)
                         
                         var timeMs = 0L
@@ -60,15 +60,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                                 )
                                 
                                 if (bitmap != null) {
-                                    // Scale down bitmap to reduce memory usage
+                                    // CRITICAL: Much smaller thumbnails to reduce memory usage
                                     val scaledBitmap = Bitmap.createScaledBitmap(
                                         bitmap, 
-                                        120, 
-                                        (120 * bitmap.height) / bitmap.width, 
+                                        80, // Reduced from 120 to 80
+                                        (80 * bitmap.height) / bitmap.width, 
                                         true
                                     )
-                                    bitmap.recycle() // Free original bitmap memory
+                                    bitmap.recycle() // Free original bitmap memory immediately
                                     thumbnails.add(ThumbnailItem(scaledBitmap, timeMs))
+                                    
+                                    // CRITICAL: Force garbage collection periodically
+                                    if (thumbnails.size % 5 == 0) {
+                                        System.gc()
+                                    }
                                 }
                             } catch (e: Exception) {
                                 // Skip this thumbnail if extraction fails

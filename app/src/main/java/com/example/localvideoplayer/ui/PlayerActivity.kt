@@ -212,6 +212,24 @@ class PlayerActivity : AppCompatActivity() {
         playerListener?.let { exoPlayer?.removeListener(it) }
         exoPlayer?.release()
         exoPlayer = null
+        
+        // CRITICAL: Clean up thumbnails to prevent memory leaks
+        cleanupThumbnails()
+    }
+    
+    private fun cleanupThumbnails() {
+        // Force cleanup of thumbnail bitmaps to prevent memory leaks
+        viewModel.thumbnails.value?.let { resource ->
+            if (resource is com.example.localvideoplayer.data.Resource.Success) {
+                resource.data?.forEach { thumbnail ->
+                    if (!thumbnail.bitmap.isRecycled) {
+                        thumbnail.bitmap.recycle()
+                    }
+                }
+            }
+        }
+        // Force garbage collection
+        System.gc()
     }
 
     private fun setupThumbnailRecyclerView() {
@@ -244,6 +262,8 @@ class PlayerActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT <= 23) {
             releasePlayer()
         }
+        // CRITICAL: Clean up memory when app goes to background
+        cleanupThumbnails()
     }
 
     public override fun onStop() {
@@ -251,5 +271,14 @@ class PlayerActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT > 23) {
             releasePlayer()
         }
+        // CRITICAL: Force memory cleanup when activity stops
+        System.gc()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // CRITICAL: Final cleanup to prevent memory leaks
+        releasePlayer()
+        cleanupThumbnails()
     }
 }
