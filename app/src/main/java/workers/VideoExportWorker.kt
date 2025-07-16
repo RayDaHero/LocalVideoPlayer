@@ -68,8 +68,8 @@ class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
 
                 val safeOutputUri = FFmpegKitConfig.getSafParameterForWrite(applicationContext, outputUri)
 
-                // CORRECTED: Added high-quality video and audio flags (-crf 18, -c:a aac)
-                val command = "-y -i $safeInputUri -ss ${formatTime(startTimeMs)} -to ${formatTime(endTimeMs)} -c:v libx264 -crf 18 -c:a aac $safeOutputUri"
+                // FIXED: Use compatible FFmpeg options without -crf (not supported in this build)
+                val command = "-y -i $safeInputUri -ss ${formatTime(startTimeMs)} -to ${formatTime(endTimeMs)} -c:v libx264 -b:v 3M -c:a aac -b:a 128k $safeOutputUri"
 
                 FFmpegKitConfig.enableStatisticsCallback { stats ->
                     val duration = endTimeMs - startTimeMs
