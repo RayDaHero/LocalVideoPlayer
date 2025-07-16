@@ -18,16 +18,14 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.concurrent.TimeUnit
 
 class VideoRepository(private val context: Context) {
 
-    // Export status LiveData
     private val _exportEvent = MutableLiveData<ExportStatus>(ExportStatus.Idle)
     val exportEvent: LiveData<ExportStatus> = _exportEvent
 
-    suspend fun getVideos(onlyExported: Boolean = false): List<VideoItem> {
+    suspend fun getVideos(onlyExported: Boolean = false, searchQuery: String? = null): List<VideoItem> {
         return withContext(Dispatchers.IO) {
             val videoList = mutableListOf<VideoItem>()
             val projection = arrayOf(
@@ -39,29 +37,31 @@ class VideoRepository(private val context: Context) {
                 MediaStore.Video.Media.HEIGHT
             )
 
-            val selection = if (onlyExported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Video.Media.RELATIVE_PATH + " LIKE ?"
-            } else {
-                null
+            val selectionClauses = mutableListOf<String>()
+            val selectionArgsList = mutableListOf<String>()
+
+            if (onlyExported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                selectionClauses.add(MediaStore.Video.Media.RELATIVE_PATH + " LIKE ?")
+                selectionArgsList.add("%LocalVideoPlayer%")
             }
 
-            val selectionArgs = if (onlyExported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                arrayOf("%LocalVideoPlayer%")
-            } else {
-                null
+            if (!searchQuery.isNullOrBlank()) {
+                selectionClauses.add(MediaStore.Video.Media.DISPLAY_NAME + " LIKE ?")
+                selectionArgsList.add("%$searchQuery%")
             }
+
+            val selection = selectionClauses.joinToString(" AND ")
+            val selectionArgs = selectionArgsList.toTypedArray()
 
             try {
-                Log.d("VideoRepository", "Starting video query with onlyExported: $onlyExported")
                 val cursor = context.contentResolver.query(
                     MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                     projection,
-                    selection,
-                    selectionArgs,
-                    "${MediaStore.Video.Media.DATE_ADDED} DESC" // Fixed: Removed LIMIT from sort order
+                    if (selection.isNotEmpty()) selection else null,
+                    if (selectionArgs.isNotEmpty()) selectionArgs else null,
+                    "${MediaStore.Video.Media.DATE_ADDED} DESC"
                 )
 
-                Log.d("VideoRepository", "Cursor result: ${cursor?.count ?: 0} videos found")
                 cursor?.use {
                     val idColumn = it.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                     val nameColumn = it.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
@@ -78,14 +78,12 @@ class VideoRepository(private val context: Context) {
                         val width = it.getInt(widthColumn)
                         val height = it.getInt(heightColumn)
 
-                        // Skip extremely short videos (less than 100ms) as they're likely corrupted
                         if (durationMs < 100) continue
 
                         val contentUri = ContentUris.withAppendedId(
                             MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id
                         )
 
-                        // Quick validation without opening the file (performance improvement)
                         videoList.add(
                             VideoItem(
                                 uri = contentUri,
@@ -95,7 +93,6 @@ class VideoRepository(private val context: Context) {
                                 resolution = if (width > 0 && height > 0) "$width x $height" else "Unknown"
                             )
                         )
-                        Log.d("VideoRepository", "Added video: $name, duration: ${formatDuration(durationMs)}")
                     }
                 }
             } catch (e: Exception) {
@@ -136,25 +133,18 @@ class VideoRepository(private val context: Context) {
     /**
      * Exports a video clip using the specified time range
      * @param uri The URI of the source video
-     * @param startTimeSeconds Start time in seconds
-     * @param endTimeSeconds End time in seconds
+     * @param startTimeMs Start time in milliseconds
+     * @param endTimeMs End time in milliseconds
      */
-    fun exportVideoClip(uri: Uri, startTimeSeconds: Double, endTimeSeconds: Double) {
+    fun exportVideoClip(uri: Uri, startTimeMs: Long, endTimeMs: Long) {
         try {
-            // Validate input parameters
-            if (startTimeSeconds < 0 || endTimeSeconds <= startTimeSeconds) {
+            if (startTimeMs < 0 || endTimeMs <= startTimeMs) {
                 _exportEvent.value = ExportStatus.Error("Invalid time range specified")
                 return
             }
 
-            // Set status to in progress
             _exportEvent.value = ExportStatus.InProgress
 
-            // Convert seconds to milliseconds for WorkManager
-            val startTimeMs = (startTimeSeconds * 1000).toLong()
-            val endTimeMs = (endTimeSeconds * 1000).toLong()
-
-            // Create work request for video export
             val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.example.localvideoplayer.workers.VideoExportWorker>()
                 .setInputData(
                     androidx.work.workDataOf(
@@ -165,12 +155,7 @@ class VideoRepository(private val context: Context) {
                 )
                 .build()
 
-            // Enqueue the work
             androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
-
-            // Monitor work progress (simplified - in a real app you'd observe WorkInfo)
-            // For now, we'll let the WorkManager handle the actual export
-            // The status will be updated when work completes
 
         } catch (e: Exception) {
             Log.e("VideoRepository", "Failed to start video export", e)

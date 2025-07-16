@@ -5,6 +5,10 @@ import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -13,17 +17,14 @@ import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import androidx.work.workDataOf
-import com.arthenica.ffmpegkit.FFmpegKit
-import com.arthenica.ffmpegkit.FFmpegKitConfig
-import com.arthenica.ffmpegkit.ReturnCode
 import com.example.localvideoplayer.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
     CoroutineWorker(appContext, workerParams) {
@@ -35,17 +36,15 @@ class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
         const val KEY_INPUT_URI = "KEY_INPUT_URI"
         const val KEY_START_MS = "KEY_START_MS"
         const val KEY_END_MS = "KEY_END_MS"
-        const val KEY_OUTPUT_URI = "KEY_OUTPUT_URI"
         const val NOTIFICATION_ID = 1
         const val CHANNEL_ID = "VideoExportChannel"
     }
 
     override suspend fun doWork(): Result {
         val inputUriString = inputData.getString(KEY_INPUT_URI) ?: return Result.failure()
-        val startTimeMs = inputData.getLong(KEY_START_MS, 0)
-        val endTimeMs = inputData.getLong(KEY_END_MS, 0)
-
-        val safeInputUri = FFmpegKitConfig.getSafParameterForRead(applicationContext, Uri.parse(inputUriString))
+        val startTimeUs = inputData.getLong(KEY_START_MS, 0) * 1000
+        val endTimeUs = inputData.getLong(KEY_END_MS, 0) * 1000
+        val inputUri = Uri.parse(inputUriString)
 
         return withContext(Dispatchers.IO) {
             try {
@@ -66,30 +65,22 @@ class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
                 val outputUri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
                     ?: return@withContext Result.failure()
 
-                val safeOutputUri = FFmpegKitConfig.getSafParameterForWrite(applicationContext, outputUri)
-
-                // FIXED: Use stream copy for maximum compatibility (no re-encoding needed)
-                val command = "-y -i $safeInputUri -ss ${formatTime(startTimeMs)} -to ${formatTime(endTimeMs)} -c copy $safeOutputUri"
-
-                FFmpegKitConfig.enableStatisticsCallback { stats ->
-                    val duration = endTimeMs - startTimeMs
-                    if (duration > 0) {
-                        val progress = (stats.time.toFloat() / duration.toFloat()) * 100
-                        val notification = createNotification("Exporting... ${progress.toInt()}%")
-                        notificationManager.notify(NOTIFICATION_ID, notification)
-                    }
+                resolver.openFileDescriptor(outputUri, "w")?.use { pfd ->
+                    trimVideo(
+                        context = applicationContext,
+                        inputUri = inputUri,
+                        outputPfd = pfd.fileDescriptor,
+                        startUs = startTimeUs,
+                        endUs = endTimeUs,
+                        onProgress = { progress ->
+                            val notification = createNotification("Exporting... ${progress.toInt()}%")
+                            notificationManager.notify(NOTIFICATION_ID, notification)
+                        }
+                    )
                 }
 
-                val session = FFmpegKit.execute(command)
-
-                if (ReturnCode.isSuccess(session.returnCode)) {
-                    showCompletionNotification(outputUri)
-                    Result.success(workDataOf(KEY_OUTPUT_URI to outputUri.toString()))
-                } else {
-                    Log.e("VideoExportWorker", "FFmpeg command failed with state ${session.state} and return code ${session.returnCode}. Log: ${session.allLogsAsString}")
-                    resolver.delete(outputUri, null, null)
-                    Result.failure()
-                }
+                showCompletionNotification()
+                Result.success()
 
             } catch (e: Exception) {
                 Log.e("VideoExportWorker", "Export failed with exception", e)
@@ -98,16 +89,87 @@ class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
         }
     }
 
+    @Throws(IOException::class)
+    private fun trimVideo(
+        context: Context,
+        inputUri: Uri,
+        outputPfd: java.io.FileDescriptor,
+        startUs: Long,
+        endUs: Long,
+        onProgress: (Float) -> Unit
+    ) {
+        val extractor = MediaExtractor()
+        var muxer: MediaMuxer? = null
+        try {
+            extractor.setDataSource(context, inputUri, null)
+            muxer = MediaMuxer(outputPfd, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            val trackIndexMap = mutableMapOf<Int, Int>()
+            var videoTrackIndex = -1
+            var audioTrackIndex = -1
+
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                if (videoTrackIndex == -1 && mime.startsWith("video/")) {
+                    videoTrackIndex = i
+                } else if (audioTrackIndex == -1 && mime.startsWith("audio/")) {
+                    audioTrackIndex = i
+                }
+            }
+
+            if (videoTrackIndex != -1) {
+                extractor.selectTrack(videoTrackIndex)
+                trackIndexMap[videoTrackIndex] = muxer.addTrack(extractor.getTrackFormat(videoTrackIndex))
+            }
+            if (audioTrackIndex != -1) {
+                extractor.selectTrack(audioTrackIndex)
+                trackIndexMap[audioTrackIndex] = muxer.addTrack(extractor.getTrackFormat(audioTrackIndex))
+            }
+
+            muxer.start()
+
+            val buffer = ByteBuffer.allocate(1024 * 1024)
+            val bufferInfo = MediaCodec.BufferInfo()
+
+            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+
+            while (true) {
+                val sampleTrackIndex = extractor.sampleTrackIndex
+                if (sampleTrackIndex == -1 || extractor.sampleTime >= endUs) {
+                    break
+                }
+
+                if (trackIndexMap.containsKey(sampleTrackIndex)) {
+                    bufferInfo.size = extractor.readSampleData(buffer, 0)
+                    bufferInfo.presentationTimeUs = extractor.sampleTime - startUs
+                    bufferInfo.flags = extractor.sampleFlags
+
+                    if (bufferInfo.size > 0) {
+                        muxer.writeSampleData(trackIndexMap.getValue(sampleTrackIndex), buffer, bufferInfo)
+                    }
+
+                    val progress = (extractor.sampleTime - startUs).toFloat() / (endUs - startUs).toFloat() * 100
+                    onProgress(progress)
+                }
+                extractor.advance()
+            }
+        } finally {
+            extractor.release()
+            muxer?.stop()
+            muxer?.release()
+        }
+    }
+
+
     private fun createForegroundInfo(progress: String): ForegroundInfo {
         createNotificationChannel()
         val notification = createNotification(progress)
-
         val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         } else {
             0
         }
-
         return ForegroundInfo(NOTIFICATION_ID, notification, foregroundServiceType)
     }
 
@@ -120,7 +182,7 @@ class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .build()
 
-    private fun showCompletionNotification(uri: Uri) {
+    private fun showCompletionNotification() {
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setContentTitle("Export Complete")
             .setContentText("Video saved to Movies folder.")
@@ -139,13 +201,5 @@ class VideoExportWorker(appContext: Context, workerParams: WorkerParameters) :
             )
             notificationManager.createNotificationChannel(channel)
         }
-    }
-
-    private fun formatTime(ms: Long): String {
-        val hours = TimeUnit.MILLISECONDS.toHours(ms)
-        val minutes = TimeUnit.MILLISECONDS.toMinutes(ms) % 60
-        val seconds = TimeUnit.MILLISECONDS.toSeconds(ms) % 60
-        val millis = ms % 1000
-        return String.format("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
     }
 }

@@ -1,7 +1,3 @@
-// =================================================================================
-// File: ui/PlayerActivity.kt
-// Description: MODIFIED - Replaced looping logic with a stable, non-blocking implementation to fix UI and export issues.
-// =================================================================================
 package com.example.localvideoplayer.ui
 
 import android.net.Uri
@@ -9,25 +5,22 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.MotionEvent
 import android.view.View
 import android.view.animation.AnimationUtils
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.Observer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.example.localvideoplayer.R
+import com.example.localvideoplayer.data.ExportStatus
+import com.example.localvideoplayer.data.Resource
 import com.example.localvideoplayer.databinding.ActivityPlayerBinding
 import com.example.localvideoplayer.viewmodel.PlayerViewModel
-import com.example.localvideoplayer.workers.VideoExportWorker
 import java.util.concurrent.TimeUnit
 
 class PlayerActivity : AppCompatActivity() {
@@ -42,6 +35,8 @@ class PlayerActivity : AppCompatActivity() {
     private var loopRunnable: Runnable? = null
     private var playerListener: Player.Listener? = null
 
+    private lateinit var controlVisibilityManager: ControlVisibilityManager
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityPlayerBinding.inflate(layoutInflater)
@@ -55,6 +50,7 @@ class PlayerActivity : AppCompatActivity() {
 
         setupThumbnailRecyclerView()
         setupClickListeners()
+        setupControlVisibilityManager()
         observeViewModel()
 
         binding.customControlsPanel.visibility = View.GONE
@@ -68,9 +64,32 @@ class PlayerActivity : AppCompatActivity() {
             binding.playerView.player = player
             val mediaItem = MediaItem.fromUri(videoUri!!)
             player.setMediaItem(mediaItem)
-            player.repeatMode = Player.REPEAT_MODE_ONE // Loop full video by default
+            player.repeatMode = Player.REPEAT_MODE_ONE
             player.playWhenReady = true
             player.prepare()
+
+            playerListener = object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) {
+                        loopRunnable?.let { loopHandler.post(it) }
+                    } else {
+                        loopRunnable?.let { loopHandler.removeCallbacks(it) }
+                    }
+                    updatePlayPauseButton()
+                }
+
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int
+                ) {
+                    if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                        handleUserInteraction()
+                    }
+                }
+            }
+            player.addListener(playerListener!!)
+            updatePlayPauseButton()
         }
     }
 
@@ -80,41 +99,22 @@ class PlayerActivity : AppCompatActivity() {
         val startMs = loopPair?.first
         val endMs = loopPair?.second
 
-        // Always clean up previous listeners and handlers to prevent memory leaks and redundant checks
-        playerListener?.let { player.removeListener(it) }
         loopRunnable?.let { loopHandler.removeCallbacks(it) }
 
         if (startMs != null && endMs != null && startMs != -1L && endMs != -1L) {
-            // A custom loop is set. Disable ExoPlayer's default looping.
             player.repeatMode = Player.REPEAT_MODE_OFF
 
             loopRunnable = Runnable {
-                // This check is very lightweight and will not block the UI thread.
                 if (player.currentPosition >= endMs) {
                     player.seekTo(startMs)
                 }
-                // Continue checking only if the runnable is not null
                 loopRunnable?.let { loopHandler.postDelayed(it, 100) }
             }
 
-            // We only need to know when the player starts/stops to manage the handler.
-            playerListener = object : Player.Listener {
-                override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    if (isPlaying) {
-                        loopRunnable?.let { loopHandler.post(it) }
-                    } else {
-                        loopRunnable?.let { loopHandler.removeCallbacks(it) }
-                    }
-                }
-            }
-            player.addListener(playerListener!!)
-
-            // If the player is already playing when the loop is set, start the handler.
             if (player.isPlaying) {
                 loopRunnable?.let { loopHandler.post(it) }
             }
         } else {
-            // No custom loop, so ensure default looping is enabled.
             player.repeatMode = Player.REPEAT_MODE_ONE
         }
     }
@@ -122,21 +122,45 @@ class PlayerActivity : AppCompatActivity() {
     private fun setupClickListeners() {
         binding.setStartButton.setOnClickListener {
             exoPlayer?.currentPosition?.let { viewModel.setLoopStart(it) }
+            handleUserInteraction()
         }
         binding.setEndButton.setOnClickListener {
             exoPlayer?.currentPosition?.let { viewModel.setLoopEnd(it) }
+            handleUserInteraction()
         }
         binding.clearLoopButton.setOnClickListener {
             viewModel.clearLoop()
+            handleUserInteraction()
         }
         binding.exportButton.setOnClickListener {
             if (videoUri != null) {
                 viewModel.exportVideo(videoUri!!)
             }
+            handleUserInteraction()
         }
-
         binding.toggleCustomControlsButton.setOnClickListener {
             toggleCustomControlsPanel()
+            handleUserInteraction()
+        }
+        binding.playPauseButton.setOnClickListener {
+            exoPlayer?.let { player ->
+                if (player.isPlaying) {
+                    player.pause()
+                } else {
+                    player.play()
+                }
+            }
+            handleUserInteraction()
+        }
+    }
+
+    private fun updatePlayPauseButton() {
+        exoPlayer?.let { player ->
+            if (player.isPlaying) {
+                binding.playPauseButton.setImageResource(android.R.drawable.ic_media_pause)
+            } else {
+                binding.playPauseButton.setImageResource(android.R.drawable.ic_media_play)
+            }
         }
     }
 
@@ -146,35 +170,60 @@ class PlayerActivity : AppCompatActivity() {
             binding.customControlsPanel.startAnimation(slideUp)
             binding.customControlsPanel.visibility = View.VISIBLE
             binding.toggleCustomControlsButton.setImageResource(R.drawable.ic_arrow_down)
+            updateControlsVisibilityForCustomPanel(true)
         } else {
             val slideDown = AnimationUtils.loadAnimation(this, R.anim.slide_down)
             binding.customControlsPanel.startAnimation(slideDown)
             binding.customControlsPanel.visibility = View.GONE
             binding.toggleCustomControlsButton.setImageResource(R.drawable.ic_arrow_up)
+            updateControlsVisibilityForCustomPanel(false)
+        }
+    }
+
+    private fun updateControlsVisibilityForCustomPanel(isVisible: Boolean) {
+        if (::controlVisibilityManager.isInitialized) {
+            controlVisibilityManager.setCustomControlsMode(isVisible)
         }
     }
 
     private fun observeViewModel() {
         viewModel.thumbnails.observe(this, Observer { resource ->
             when (resource) {
-                is com.example.localvideoplayer.data.Resource.Loading -> {
+                is Resource.Loading -> {
                     binding.timelineProgressBar.visibility = View.VISIBLE
                 }
-                is com.example.localvideoplayer.data.Resource.Success -> {
+                is Resource.Success -> {
                     binding.timelineProgressBar.visibility = View.GONE
                     resource.data?.let { thumbnailAdapter.submitList(it) }
                 }
-                is com.example.localvideoplayer.data.Resource.Error -> {
+                is Resource.Error -> {
                     binding.timelineProgressBar.visibility = View.GONE
                     Toast.makeText(this, resource.message, Toast.LENGTH_SHORT).show()
                 }
             }
         })
 
-        viewModel.loopPosition.observe(this) { loopPair ->
+        viewModel.loopPosition.observe(this) {
             binding.thumbnailsRecyclerView.invalidateItemDecorations()
             updateLoopingState()
             updateLoopUi()
+        }
+
+        // --- MODIFIED: Added message for successful export ---
+        viewModel.exportEvent.observe(this) { status ->
+            when (status) {
+                is ExportStatus.InProgress -> {
+                    Toast.makeText(this, "Export started...", Toast.LENGTH_SHORT).show()
+                }
+                is ExportStatus.Success -> {
+                    Toast.makeText(this, "Export successful!", Toast.LENGTH_SHORT).show()
+                }
+                is ExportStatus.Error -> {
+                    Toast.makeText(this, "Export failed: ${status.message}", Toast.LENGTH_LONG).show()
+                }
+                else -> { // Idle
+                }
+            }
         }
     }
 
@@ -189,18 +238,6 @@ class PlayerActivity : AppCompatActivity() {
         binding.exportButton.visibility = if (startMs != null && endMs != null && startMs != -1L && endMs != -1L) View.VISIBLE else View.GONE
     }
 
-    private fun startExport(uri: Uri, startMs: Long, endMs: Long) {
-        Toast.makeText(this, "Starting export...", Toast.LENGTH_SHORT).show()
-        val workRequest = OneTimeWorkRequestBuilder<VideoExportWorker>()
-            .setInputData(workDataOf(
-                VideoExportWorker.KEY_INPUT_URI to uri.toString(),
-                VideoExportWorker.KEY_START_MS to startMs,
-                VideoExportWorker.KEY_END_MS to endMs
-            ))
-            .build()
-        WorkManager.getInstance(this).enqueue(workRequest)
-    }
-
     private fun formatTime(ms: Long): String {
         val minutes = TimeUnit.MILLISECONDS.toMinutes(ms) % 60
         val seconds = TimeUnit.MILLISECONDS.toSeconds(ms) % 60
@@ -212,34 +249,48 @@ class PlayerActivity : AppCompatActivity() {
         playerListener?.let { exoPlayer?.removeListener(it) }
         exoPlayer?.release()
         exoPlayer = null
-        
-        // CRITICAL: Clean up thumbnails to prevent memory leaks
         cleanupThumbnails()
     }
-    
+
     private fun cleanupThumbnails() {
-        // Force cleanup of thumbnail bitmaps to prevent memory leaks
-        viewModel.thumbnails.value?.let { resource ->
-            if (resource is com.example.localvideoplayer.data.Resource.Success) {
-                resource.data?.forEach { thumbnail ->
-                    if (!thumbnail.bitmap.isRecycled) {
-                        thumbnail.bitmap.recycle()
+        Thread {
+            viewModel.thumbnails.value?.let { resource ->
+                if (resource is Resource.Success) {
+                    resource.data?.forEach { thumbnail ->
+                        if (!thumbnail.bitmap.isRecycled) {
+                            thumbnail.bitmap.recycle()
+                        }
                     }
                 }
             }
-        }
-        // Force garbage collection
-        System.gc()
+        }.start()
     }
 
     private fun setupThumbnailRecyclerView() {
         thumbnailAdapter = ThumbnailAdapter { timestamp ->
             exoPlayer?.seekTo(timestamp)
+            handleUserInteraction()
         }
         binding.thumbnailsRecyclerView.apply {
             layoutManager = LinearLayoutManager(this@PlayerActivity, LinearLayoutManager.HORIZONTAL, false)
             adapter = thumbnailAdapter
             addItemDecoration(TimelineLoopIndicatorDecoration(context, viewModel))
+        }
+    }
+
+    private fun setupControlVisibilityManager() {
+        controlVisibilityManager = ControlVisibilityManager(binding.playerView, this)
+        binding.playerView.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                handleUserInteraction()
+            }
+            false
+        }
+    }
+
+    private fun handleUserInteraction() {
+        if (::controlVisibilityManager.isInitialized) {
+            controlVisibilityManager.onUserInteraction()
         }
     }
 
@@ -262,7 +313,6 @@ class PlayerActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT <= 23) {
             releasePlayer()
         }
-        // CRITICAL: Clean up memory when app goes to background
         cleanupThumbnails()
     }
 
@@ -271,14 +321,14 @@ class PlayerActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT > 23) {
             releasePlayer()
         }
-        // CRITICAL: Force memory cleanup when activity stops
-        System.gc()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // CRITICAL: Final cleanup to prevent memory leaks
         releasePlayer()
         cleanupThumbnails()
+        if (::controlVisibilityManager.isInitialized) {
+            controlVisibilityManager.cleanup()
+        }
     }
 }

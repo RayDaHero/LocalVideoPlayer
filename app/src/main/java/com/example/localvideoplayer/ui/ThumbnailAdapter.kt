@@ -7,6 +7,7 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.example.localvideoplayer.data.ThumbnailItem
 import com.example.localvideoplayer.databinding.ItemThumbnailBinding
+import java.util.concurrent.TimeUnit
 
 class ThumbnailAdapter(private val onThumbnailClick: (Long) -> Unit) :
     ListAdapter<ThumbnailItem, ThumbnailAdapter.ThumbnailViewHolder>(ThumbnailDiffCallback) {
@@ -30,6 +31,11 @@ class ThumbnailAdapter(private val onThumbnailClick: (Long) -> Unit) :
             binding.root.setOnClickListener {
                 onThumbnailClick(item.timestamp)
             }
+
+            // --- ADDED: Format and display the timestamp ---
+            val minutes = TimeUnit.MILLISECONDS.toMinutes(item.timestamp) % 60
+            val seconds = TimeUnit.MILLISECONDS.toSeconds(item.timestamp) % 60
+            binding.thumbnailTimestamp.text = String.format("%02d:%02d", minutes, seconds)
         }
     }
 }
@@ -40,6 +46,7 @@ object ThumbnailDiffCallback : DiffUtil.ItemCallback<ThumbnailItem>() {
     }
 
     override fun areContentsTheSame(oldItem: ThumbnailItem, newItem: ThumbnailItem): Boolean {
-        return oldItem.bitmap == newItem.bitmap
+        // Bitmap comparison is expensive and not needed for DiffUtil if timestamp is unique
+        return oldItem.timestamp == newItem.timestamp
     }
 }

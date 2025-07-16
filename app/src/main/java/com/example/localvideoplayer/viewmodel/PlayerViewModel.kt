@@ -41,16 +41,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 val thumbnailList = withContext(Dispatchers.IO) {
                     val thumbnails = mutableListOf<ThumbnailItem>()
                     val retriever = MediaMetadataRetriever()
-                    
+
                     retriever.use {
                         it.setDataSource(getApplication<Application>(), uri)
                         val durationMs = it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
-                        
-                        // CRITICAL: Much more aggressive optimization to prevent memory issues
-                        val intervalMs = 10000L // Every 10 seconds instead of 5
-                        val maxThumbnails = 20 // Reduced from 50 to 20 thumbnails max
+
+                        val intervalMs = 5000L
+                        val maxThumbnails = 40
                         val actualInterval = maxOf(intervalMs, durationMs / maxThumbnails)
-                        
+
                         var timeMs = 0L
                         while (timeMs < durationMs && thumbnails.size < maxThumbnails) {
                             try {
@@ -58,25 +57,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                                     timeMs * 1000,
                                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC
                                 )
-                                
+
                                 if (bitmap != null) {
-                                    // CRITICAL: Much smaller thumbnails to reduce memory usage
                                     val scaledBitmap = Bitmap.createScaledBitmap(
-                                        bitmap, 
-                                        80, // Reduced from 120 to 80
-                                        (80 * bitmap.height) / bitmap.width, 
+                                        bitmap,
+                                        160,
+                                        (160 * bitmap.height) / bitmap.width,
                                         true
                                     )
-                                    bitmap.recycle() // Free original bitmap memory immediately
+                                    bitmap.recycle()
                                     thumbnails.add(ThumbnailItem(scaledBitmap, timeMs))
-                                    
-                                    // CRITICAL: Force garbage collection periodically
+
                                     if (thumbnails.size % 5 == 0) {
                                         System.gc()
                                     }
                                 }
                             } catch (e: Exception) {
-                                // Skip this thumbnail if extraction fails
                                 continue
                             }
                             timeMs += actualInterval
@@ -122,9 +118,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun exportVideo(uri: Uri) {
         val loop = _loopPosition.value
         if (loop != null && loop.first != -1L && loop.second != -1L) {
-            val startTimeSeconds = loop.first / 1000.0
-            val endTimeSeconds = loop.second / 1000.0
-            videoRepository.exportVideoClip(uri, startTimeSeconds, endTimeSeconds)
+            // MODIFIED: Pass milliseconds directly to the repository
+            videoRepository.exportVideoClip(uri, loop.first, loop.second)
         }
     }
 }

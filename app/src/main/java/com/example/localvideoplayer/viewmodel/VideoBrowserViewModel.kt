@@ -22,11 +22,13 @@ class VideoBrowserViewModel(application: Application) : AndroidViewModel(applica
     private val _isLoading = MutableLiveData<Boolean>()
     val isLoading: LiveData<Boolean> = _isLoading
 
-    fun loadAllVideos() {
+    // --- MODIFIED: Added query parameter ---
+    fun loadAllVideos(query: String? = null) {
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                _allVideos.postValue(repository.getVideos(onlyExported = false))
+                // Pass the search query to the repository
+                _allVideos.postValue(repository.getVideos(onlyExported = false, searchQuery = query))
             } finally {
                 _isLoading.value = false
             }

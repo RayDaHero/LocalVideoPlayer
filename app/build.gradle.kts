@@ -75,6 +75,9 @@ dependencies {
     implementation("com.google.android.material:material:1.10.0") //
 
     implementation("com.mrljdx:ffmpeg-kit-full:6.1.1")
+//    implementation("io.github.xch168:ffmpeg-kit-full-gpl:1.0.2")
+//    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
+
     implementation("com.mrljdx:smart-exception-java:0.2.1")
     // WorkManager for reliable background tasks (exporting)
     implementation("androidx.work:work-runtime-ktx:2.9.0")
