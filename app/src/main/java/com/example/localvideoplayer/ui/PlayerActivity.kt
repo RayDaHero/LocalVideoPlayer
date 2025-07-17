@@ -8,6 +8,7 @@ import android.os.Looper
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.AnimationUtils
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -36,6 +37,17 @@ class PlayerActivity : AppCompatActivity() {
     private var playerListener: Player.Listener? = null
 
     private lateinit var controlVisibilityManager: ControlVisibilityManager
+    
+    // Scrubber properties
+    private var isUserSeeking = false
+    private var videoDurationMs = 0L
+    private val scrubberUpdateHandler = Handler(Looper.getMainLooper())
+    private val scrubberUpdateRunnable = object : Runnable {
+        override fun run() {
+            updateScrubber()
+            scrubberUpdateHandler.postDelayed(this, 1000) // Update every second
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,6 +63,7 @@ class PlayerActivity : AppCompatActivity() {
         setupThumbnailRecyclerView()
         setupClickListeners()
         setupControlVisibilityManager()
+        setupVideoScrubber()
         observeViewModel()
 
         binding.customControlsPanel.visibility = View.GONE
@@ -72,8 +85,10 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying) {
                         loopRunnable?.let { loopHandler.post(it) }
+                        scrubberUpdateHandler.post(scrubberUpdateRunnable)
                     } else {
                         loopRunnable?.let { loopHandler.removeCallbacks(it) }
+                        scrubberUpdateHandler.removeCallbacks(scrubberUpdateRunnable)
                     }
                     updatePlayPauseButton()
                 }
@@ -246,6 +261,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun releasePlayer() {
         loopRunnable?.let { loopHandler.removeCallbacks(it) }
+        scrubberUpdateHandler.removeCallbacks(scrubberUpdateRunnable)
         playerListener?.let { exoPlayer?.removeListener(it) }
         exoPlayer?.release()
         exoPlayer = null
@@ -291,6 +307,45 @@ class PlayerActivity : AppCompatActivity() {
     private fun handleUserInteraction() {
         if (::controlVisibilityManager.isInitialized) {
             controlVisibilityManager.onUserInteraction()
+        }
+    }
+
+    private fun setupVideoScrubber() {
+        binding.videoScrubber.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    val seekPosition = (progress / 100f * videoDurationMs).toLong()
+                    binding.currentTimeText.text = formatTime(seekPosition)
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                isUserSeeking = true
+                handleUserInteraction()
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val progress = seekBar?.progress ?: 0
+                val seekPosition = (progress / 100f * videoDurationMs).toLong()
+                exoPlayer?.seekTo(seekPosition)
+                isUserSeeking = false
+                handleUserInteraction()
+            }
+        })
+    }
+
+    private fun updateScrubber() {
+        if (!isUserSeeking && exoPlayer != null) {
+            val currentPosition = exoPlayer!!.currentPosition
+            val duration = exoPlayer!!.duration
+            
+            if (duration > 0) {
+                val progress = ((currentPosition.toFloat() / duration) * 100).toInt()
+                binding.videoScrubber.progress = progress
+                binding.currentTimeText.text = formatTime(currentPosition)
+                binding.totalTimeText.text = formatTime(duration)
+                videoDurationMs = duration
+            }
         }
     }
 

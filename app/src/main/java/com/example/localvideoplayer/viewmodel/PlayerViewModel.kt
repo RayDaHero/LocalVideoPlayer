@@ -46,9 +46,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                         it.setDataSource(getApplication<Application>(), uri)
                         val durationMs = it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
 
+                        // Fixed 5-second intervals
                         val intervalMs = 5000L
-                        val maxThumbnails = 40
-                        val actualInterval = maxOf(intervalMs, durationMs / maxThumbnails)
+                        val maxThumbnails = (durationMs / intervalMs).toInt().coerceAtMost(50) // Cap at 50 thumbnails
 
                         var timeMs = 0L
                         while (timeMs < durationMs && thumbnails.size < maxThumbnails) {
@@ -59,23 +59,27 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                                 )
 
                                 if (bitmap != null) {
+                                    // Increased quality: 200x150 instead of 160x120
+                                    val targetWidth = 200
+                                    val targetHeight = 150
                                     val scaledBitmap = Bitmap.createScaledBitmap(
                                         bitmap,
-                                        160,
-                                        (160 * bitmap.height) / bitmap.width,
-                                        true
+                                        targetWidth,
+                                        targetHeight,
+                                        true // Use high-quality filtering
                                     )
                                     bitmap.recycle()
                                     thumbnails.add(ThumbnailItem(scaledBitmap, timeMs))
 
-                                    if (thumbnails.size % 5 == 0) {
+                                    // Less frequent garbage collection
+                                    if (thumbnails.size % 10 == 0) {
                                         System.gc()
                                     }
                                 }
                             } catch (e: Exception) {
                                 continue
                             }
-                            timeMs += actualInterval
+                            timeMs += intervalMs // Always increment by exactly 5 seconds
                         }
                     }
                     thumbnails

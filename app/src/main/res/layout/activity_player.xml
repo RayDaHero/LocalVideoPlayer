@@ -85,6 +85,55 @@
         </LinearLayout>
         
         <LinearLayout
+            android:id="@+id/scrubber_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/current_time_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@android:color/white"
+                    android:textSize="12sp"
+                    android:minWidth="48dp"
+                    android:gravity="center"
+                    tools:text="00:15" />
+
+                <SeekBar
+                    android:id="@+id/video_scrubber"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginHorizontal="8dp"
+                    android:progressTint="@color/white"
+                    android:thumbTint="@color/white"
+                    android:progressBackgroundTint="#80FFFFFF"
+                    android:max="100" />
+
+                <TextView
+                    android:id="@+id/total_time_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@android:color/white"
+                    android:textSize="12sp"
+                    android:minWidth="48dp"
+                    android:gravity="center"
+                    tools:text="02:30" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+        
+        <LinearLayout
             android:id="@+id/loop_display"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -121,10 +170,11 @@
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/thumbnailsRecyclerView"
                 android:layout_width="0dp"
-                android:layout_height="70dp"
+                android:layout_height="90dp"
                 android:clipToPadding="false"
                 android:orientation="horizontal"
                 android:paddingHorizontal="4dp"
+                android:paddingBottom="8dp"
                 app:layout_constraintBottom_toBottomOf="parent"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
